@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Secure Messaging — Sender UI (AES-GCM)</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#7c3aed;--glass: rgba(255,255,255,0.03);--success: #16a34a;--danger: #ef4444}
+    *{box-sizing:border-box}html,body{height:100%}body{margin:0;font-family:Inter,system-ui, -apple-system, "Segoe UI", Roboto, Arial;background:linear-gradient(180deg,#071024 0%,#081226 60%);color:#e6eef8;padding:28px}
+    .wrap{max-width:980px;margin:0 auto;display:grid;grid-template-columns:1fr 420px;gap:20px}
+    header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+    header h1{font-size:18px;margin:0}header p{margin:0;color:var(--muted);font-size:13px}
+    .card{background:linear-gradient(180deg,var(--card), #061226);border-radius:12px;padding:18px;box-shadow:0 6px 18px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.03)}
+    .compose{display:flex;flex-direction:column;gap:10px}
+    textarea#compose{width:100%;min-height:180px;resize:vertical;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;font-size:14px;outline:none}
+    .meta{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .controls{display:flex;align-items:center;gap:8px}
+    .btn{padding:10px 14px;border-radius:10px;border:0;cursor:pointer;font-weight:600}
+    .btn:disabled{opacity:0.5;cursor:not-allowed}
+    .btn-primary{background:linear-gradient(90deg,var(--accent), #4f46e5);color:white;box-shadow:0 6px 18px rgba(79,70,229,0.12)}
+    .btn-secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+    .counter{color:var(--muted);font-size:13px}
+    .log-panel{display:flex;flex-direction:column;gap:12px}
+    .log-header{display:flex;align-items:center;justify-content:space-between}
+    .log-list{display:flex;flex-direction:column;gap:10px;max-height:520px;overflow:auto;padding-right:6px}
+    .log-item{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.02);display:flex;flex-direction:column;gap:8px}
+    .log-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .badge{padding:6px 8px;border-radius:999px;font-size:12px}
+    .badge-encrypted{background:rgba(124,58,237,0.12);color:var(--accent);border:1px solid rgba(124,58,237,0.08)}
+    .badge-sent{background:rgba(16,185,129,0.08);color:var(--success);border:1px solid rgba(16,185,129,0.06)}
+    .msg-preview{font-family:monospace;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;font-size:13px;white-space:pre-wrap;word-break:break-word}
+    .log-meta{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:13px}
+    @media (max-width:880px){.wrap{grid-template-columns:1fr}}
+    footer{grid-column:1/-1;margin-top:10px;color:var(--muted);font-size:13px;text-align:center}
+    .field-row{display:flex;gap:8px;align-items:center}
+    input[type="password"], input[type="text"]{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    .small{font-size:13px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Secure Messaging — Sender (AES-GCM)</h1>
+        <p>Encrypt messages with AES-GCM in the browser and send to Spring Boot backend.</p>
+      </div>
+    </header>
+
+    <section class="card compose">
+      <label for="compose" style="font-size:13px;color:var(--muted)">Message</label>
+      <textarea id="compose" placeholder="Type your secure message here..."></textarea>
+
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="flex:1">
+          <div class="small">Passphrase (optional) — if left blank a random key will be generated and shown for you to copy.</div>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <input id="passphrase" type="password" placeholder="Enter passphrase to derive key (optional)" style="flex:1" />
+            <button id="genKey" class="btn btn-secondary">Generate Key</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="meta">
+        <div class="controls">
+          <button id="encryptBtn" class="btn btn-secondary" title="Encrypt only">Encrypt (preview)</button>
+          <button id="sendBtn" class="btn btn-primary">Encrypt & Send</button>
+          <button id="clearBtn" class="btn" title="Clear composer">Clear</button>
+        </div>
+        <div class="counter" id="charCount">0 characters</div>
+      </div>
+
+      <div id="previewArea" style="display:none">
+        <label style="font-size:13px;color:var(--muted)">Encrypted output (JSON)</label>
+        <div class="msg-preview" id="encryptedPreview" aria-live="polite"></div>
+        <div class="small" style="margin-top:8px">Copy the <strong>Base64 key</strong> shown below to the recipient (or use your own key-exchange). Keep keys secret.</div>
+        <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+          <input id="exportedKey" type="text" readonly style="flex:1" placeholder="Base64 key will appear here" />
+          <button id="copyKey" class="btn btn-secondary">Copy</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="card log-panel">
+      <div class="log-header">
+        <div>
+          <strong>Log</strong>
+          <div style="color:var(--muted);font-size:13px">Sent / encrypted messages (local)</div>
+        </div>
+        <div>
+          <button id="clearLog" class="btn btn-secondary">Clear log</button>
+        </div>
+      </div>
+
+      <div class="log-list" id="logList" aria-live="polite"></div>
+    </aside>
+
+    <footer>Uses Web Crypto API: PBKDF2 -> AES-GCM. Messages are sent to Spring Boot endpoint /api/messages.</footer>
+  </div>
+
+  <script>
+    const el = id => document.getElementById(id);
+    const now = () => new Date().toLocaleString();
+    const STORAGE_KEY = 'secure_sender_log_aes_v1';
+
+    function toBase64(buffer){ const bytes = new Uint8Array(buffer); let binary=''; for(let i=0;i<bytes.byteLength;i++) binary+=String.fromCharCode(bytes[i]); return btoa(binary); }
+    function fromBase64(b64){ const binary=atob(b64); const len=binary.length; const bytes=new Uint8Array(len); for(let i=0;i<len;i++) bytes[i]=binary.charCodeAt(i); return bytes.buffer; }
+
+    async function deriveKeyFromPassphrase(passphrase, saltBytes, iterations=150000){
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), {name:'PBKDF2'}, false, ['deriveKey']);
+      const key = await crypto.subtle.deriveKey({name:'PBKDF2',salt: saltBytes, iterations: iterations, hash:'SHA-256'}, baseKey, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+      return key;
+    }
+
+    async function generateRandomAesKey(){ const key = await crypto.subtle.generateKey({name:'AES-GCM', length:256}, true, ['encrypt','decrypt']); return key; }
+    async function exportKeyToBase64(key){ const raw = await crypto.subtle.exportKey('raw', key); return toBase64(raw); }
+
+    async function encryptAesGcm(plaintext, options={passphrase:null}){
+      const enc = new TextEncoder();
+      const data = enc.encode(plaintext);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      let key;
+      let salt=null;
+      if(options.passphrase){
+        salt = crypto.getRandomValues(new Uint8Array(16));
+        key = await deriveKeyFromPassphrase(options.passphrase, salt);
+        salt = salt.buffer;
+      }else{ key = await generateRandomAesKey(); }
+      const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv: iv}, key, data);
+      let exportedKeyB64=null; try{ exportedKeyB64=await exportKeyToBase64(key); }catch(e){ console.warn(e); }
+      return { ciphertext: toBase64(ct), iv: toBase64(iv.buffer), salt: salt ? toBase64(salt) : null, exportedKey: exportedKeyB64 };
+    }
+
+    function loadLog(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); }catch(e){ return [] } }
+    function saveLog(arr){ localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); }
+    function renderLogs(){ const list=el('logList'); list.innerHTML=''; const logs=loadLog().slice().reverse(); if(!logs.length){ list.innerHTML='<div style="color:var(--muted)">No messages yet.</div>'; return } logs.forEach(item=>{ const node=document.createElement('div'); node.className='log-item'; node.innerHTML=`<div class="log-top"><div style="display:flex;flex-direction:column"><div style="font-weight:600">Message</div><div class="log-meta">${item.ts}</div></div><div style="display:flex;gap:8px;align-items:center"><div class="badge badge-encrypted">AES-GCM</div><div class="badge badge-sent">${item.status}</div></div></div><div class="msg-preview">${JSON.stringify(item.payload,null,2)}</div>`; list.appendChild(node); }); }
+    function appendLog(entry){ const arr=loadLog(); arr.push(entry); saveLog(arr); renderLogs(); }
+
+    const compose=el('compose'), sendBtn=el('sendBtn'), encryptBtn=el('encryptBtn'), clearBtn=el('clearBtn'), charCount=el('charCount'), previewArea=el('previewArea'), encryptedPreview=el('encryptedPreview'), exportedKey=el('exportedKey'), copyKey=el('copyKey'), passphrase=el('passphrase'), genKey=el('genKey'), clearLogBtn=el('clearLog');
+
+    function updateCharCount(){ const n=compose.value.length; charCount.textContent=`${n} character${n===1?'':'s'}`; }
+
+    async function doEncryptPreview(){ const txt=compose.value.trim(); if(!txt){ previewArea.style.display='none'; encryptedPreview.textContent=''; exportedKey.value=''; return } encryptBtn.disabled=true; encryptBtn.textContent='Encrypting...'; try{ const opts={}; if(passphrase.value) opts.passphrase=passphrase.value; const out=await encryptAesGcm(txt, opts); previewArea.style.display='block'; encryptedPreview.textContent=JSON.stringify(out,null,2); exportedKey.value=out.exportedKey||''; }catch(e){ alert('Encryption failed:'+e.message); }finally{ encryptBtn.disabled=false; encryptBtn.textContent='Encrypt (preview)'; } }
+
+    async function encryptAndSend(){ const txt=compose.value.trim(); if(!txt) return; sendBtn.disabled=true; sendBtn.textContent='Encrypting...'; const entry={id:Date.now(), ts:now(), payload:null, status:'Pending'}; appendLog(entry); try{ const opts={}; if(passphrase.value) opts.passphrase=passphrase.value; const out=await encryptAesGcm(txt, opts); entry.payload=out; entry.status='Sent';
+      await fetch('/api/messages', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ciphertext: out.ciphertext, iv: out.iv, salt: out.salt}) });
+      const arr=loadLog(); const idx=arr.findIndex(x=>x.id===entry.id); if(idx>=0){ arr[idx]=entry; saveLog(arr); } renderLogs(); previewArea.style.display='block'; encryptedPreview.textContent=JSON.stringify(out,null,2); exportedKey.value=out.exportedKey||'';
+    }catch(e){ entry.status='Failed'; const arr=loadLog(); const idx=arr.findIndex(x=>x.id===entry.id); if(idx>=0){ arr[idx]=entry; saveLog(arr); } renderLogs(); alert('Send failed: '+e.message); }finally{ sendBtn.disabled=false; sendBtn.textContent='Encrypt & Send'; } }
+
+    genKey.addEventListener('click', async ()=>{ genKey.disabled=true; genKey.textContent='Generating...'; try{ const key=await generateRandomAesKey(); const b64=await exportKeyToBase64(key); exportedKey.value=b64; alert('Random key generated and shown in the box. Share this key with the recipient.'); }catch(e){ alert('Key generation failed: '+e.message); }finally{ genKey.disabled=false; genKey.textContent='Generate Key'; } });
+    encryptBtn.addEventListener('click', ()=>{ doEncryptPreview(); });
+    sendBtn.addEventListener('click', ()=>{ encryptAndSend(); });
+    clearBtn.addEventListener('click', ()=>{ compose.value=''; updateCharCount(); previewArea.style.display='none'; encryptedPreview.textContent=''; exportedKey.value=''; compose.focus(); });
+    compose.addEventListener('input', ()=>{ updateCharCount(); });
+    compose.addEventListener('keydown', (e)=>{ if((e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); encryptAndSend(); } });
+    copyKey.addEventListener('click', async ()=>{ if(!exportedKey.value) return; await navigator.clipboard.writeText(exportedKey.value); alert('Key copied to clipboard'); });
+    clearLogBtn.addEventListener('click', ()=>{ if(!confirm('Clear log? This will remove stored messages from this browser.')) return; localStorage.removeItem(STORAGE_KEY); renderLogs(); });
+
+    updateCharCount(); renderLogs();
+  </script>
+</body>
+</html>
