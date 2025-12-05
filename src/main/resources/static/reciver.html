@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Receiver — Verify & Decrypt</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 20px; max-width: 980px; margin: auto; }
+    h1 { font-size: 1.4rem; margin-bottom: 4px; }
+    label { display:block; margin-top:12px; }
+    textarea { width:100%; height:160px; font-family: monospace; padding:8px; }
+    input[type=text] { width: 100%; padding:8px; }
+    button { margin-top:12px; padding:10px 14px; border-radius:6px; border: none; background:#0366d6; color:white; cursor:pointer; }
+    button:disabled { opacity:0.5; cursor:not-allowed; }
+    .card { border:1px solid #ddd; padding:12px; border-radius:8px; margin-top:12px; background:#fafafa; }
+    pre { background:#111; color:#eee; padding:10px; border-radius:6px; overflow:auto; }
+    .spinner { width:14px; height:14px; border-radius:50%; border:3px solid #ddd; border-top-color:#0366d6; animation: spin 1s linear infinite; display:inline-block; vertical-align:middle; margin-right:8px; }
+    .messages { margin-top:12px; }
+    .msg { padding:8px 10px; border-radius:6px; background:#fff; border:1px solid #eee; margin-bottom:8px; }
+    .small { font-size:0.9rem; color:#333; }
+    .result-ok { background:#e6ffed; border-color:#b6f0c9; }
+    .result-fail { background:#ffecec; border-color:#f0b6b6; }
+    .field { word-break:break-all; font-family: monospace; font-size:0.9rem; margin-top:6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>Receiver — Verify & Decrypt (with nonce & timestamp)</h1>
+
+  <div class="card">
+    <label>Sender ID: <input id="senderId" type="text" value="alice" /></label>
+    <label>Receiver ID: <input id="receiverId" type="text" value="bob" /></label>
+
+    <div style="display:flex; gap:8px; margin-top:12px">
+      <button id="fetchBtn">Fetch latest package from server</button>
+      <button id="verifyBtn">Verify locally & Decrypt (server)</button>
+      <button id="loadExampleBtn">Load example</button>
+    </div>
+
+    <label style="margin-top:12px">Package JSON (will be filled by fetch or paste manually):</label>
+    <textarea id="packageJson" placeholder='{"senderId":"alice","receiverId":"bob","timestamp":1234567890,"nonce":"...","encryptedAesKey":"...","iv":"...","ciphertext":"...","signature":"..."}'></textarea>
+
+    <!-- Message log placed directly under the controls -->
+    <div id="messages" class="messages"></div>
+  </div>
+
+  <div class="card">
+    <h3>Results & Outputs</h3>
+
+    <div><strong>Timestamp (ms):</strong>
+      <div id="timestamp" class="field">—</div></div>
+
+    <div><strong>Nonce (Base64):</strong>
+      <div id="nonce" class="field">—</div></div>
+
+    <div><strong>IV (Base64):</strong>
+      <div id="iv" class="field">—</div></div>
+
+    <div><strong>Ciphertext (Base64):</strong>
+      <pre id="ciphertext">—</pre></div>
+
+    <div><strong>SHA-256 (ciphertext) (hex):</strong>
+      <div id="hashHex" class="field">—</div></div>
+
+    <div><strong>Signature (Base64):</strong>
+      <div id="signature" class="field">—</div></div>
+
+    <div><strong>Encrypted AES key (Base64):</strong>
+      <div id="wrappedKey" class="field">—</div></div>
+
+    <div><strong>Local signature verification:</strong>
+      <div id="verifyLocal" class="field">—</div></div>
+
+    <div><strong>Server verification & decryption result:</strong>
+      <div id="serverResult" class="field">—</div></div>
+
+    <div><strong>Plaintext (decrypted):</strong>
+      <pre id="plaintext">—</pre></div>
+
+    <div><strong>Package (fetched / pasted):</strong>
+      <pre id="packageShow">—</pre></div>
+  </div>
+
+  <script>
+    // ---- AUTO‑LOAD PACKAGE FROM ATTACKER.HTML ----
+(function () {
+    const params = new URLSearchParams(window.location.search);
+    const encoded = params.get("package");
+    if (!encoded) return;  // No package provided → do nothing
+
+    try {
+        const json = JSON.parse(decodeURIComponent(encoded));
+        const textarea = document.getElementById("packageJson");
+
+        if (textarea) {
+            textarea.value = JSON.stringify(json, null, 2);
+
+            // Optional: show confirmation area if you already have a log/output div
+            const out = document.getElementById("output");
+            if (out) {
+                const div = document.createElement("div");
+                div.className = "msg";
+                div.innerHTML = `<div class="success">Loaded package from attacker.</div>`;
+                out.appendChild(div);
+            }
+        }
+    } catch (e) {
+        console.error("Failed to decode attacker package:", e);
+    }
+})();
+    // Small helpers
+    const messagesEl = document.getElementById('messages');
+    const setField = (id, txt) => document.getElementById(id).textContent = txt;
+    const setPre = (id, txt) => document.getElementById(id).textContent = txt;
+    function appendMsg(text, cls) {
+      const d = document.createElement('div'); d.className = 'msg' + (cls ? (' ' + cls) : '');
+      d.innerHTML = `<div class="small">${text}</div>`;
+      messagesEl.appendChild(d);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return d;
+    }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // Safe Base64 -> Uint8Array (strips whitespace, gives friendly errors)
+    function b64ToArrSafe(s, label) {
+      if (typeof s !== 'string') throw new Error('Missing ' + (label || 'value'));
+      try {
+        const cleaned = s.replace(/\s+/g, '');
+        const bin = atob(cleaned);
+        return Uint8Array.from(bin, c => c.charCodeAt(0));
+      } catch (e) {
+        throw new Error('Invalid Base64 for ' + (label || 'value') + ': ' + e.message);
+      }
+    }
+    function bufToHex(buf) { return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join(''); }
+
+    // runStep: show spinner, execute action, keep spinner a short time for UX
+    async function runStep(text, action) {
+      const node = appendMsg(text);
+      const spinner = document.createElement('span'); spinner.className = 'spinner';
+      node.prepend(spinner);
+      try {
+        const res = await action();
+        await sleep(900 + Math.floor(Math.random()*900));
+        spinner.remove();
+        const ok = document.createElement('span'); ok.textContent = ' ✅'; ok.style.marginLeft = '8px';
+        node.appendChild(ok);
+        return res;
+      } catch (err) {
+        spinner.remove();
+        const fail = document.createElement('span'); fail.textContent = ' ✖'; fail.style.color = 'crimson'; fail.style.marginLeft = '8px';
+        node.appendChild(fail);
+        const em = document.createElement('div'); em.className = 'small'; em.textContent = 'Error: ' + (err && err.message ? err.message : err);
+        node.appendChild(em);
+        throw err;
+      }
+    }
+
+    // Load example placeholders
+    document.getElementById('loadExampleBtn').addEventListener('click', () => {
+      const example = {
+        senderId: "alice",
+        receiverId: "bob",
+        timestamp: Date.now(),
+        nonce: "<Base64-nonce>",
+        encryptedAesKey: "<Base64-wrapped-AES-key>",
+        iv: "<Base64-iv>",
+        ciphertext: "<Base64-ciphertext>",
+        signature: "<Base64-signature>"
+      };
+      document.getElementById('packageJson').value = JSON.stringify(example, null, 2);
+      appendMsg('Example package loaded into textarea. Replace placeholders with a real package or click Fetch.');
+    });
+
+    // Fetch latest package endpoint
+    document.getElementById('fetchBtn').addEventListener('click', async () => {
+      const senderId = (document.getElementById('senderId').value || '').trim();
+      const receiverId = (document.getElementById('receiverId').value || '').trim();
+      if (!senderId || !receiverId) { appendMsg('senderId and receiverId required to fetch', 'result-fail'); return; }
+
+      try {
+        await runStep('Fetching package from server (GET /api/message/latest?senderId=' + encodeURIComponent(senderId) + '&receiverId=' + encodeURIComponent(receiverId) + ')', async () => {
+          const url = '/api/message/latest?senderId=' + encodeURIComponent(senderId) + '&receiverId=' + encodeURIComponent(receiverId);
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            const txt = await resp.text();
+            throw new Error('Server returned ' + resp.status + ': ' + txt);
+          }
+          const pkg = await resp.json();
+          // place into textarea and display summary fields
+          document.getElementById('packageJson').value = JSON.stringify(pkg, null, 2);
+          setPre('packageShow', JSON.stringify(pkg, null, 2));
+          setField('timestamp', pkg.timestamp ?? '—');
+          setField('nonce', pkg.nonce ?? '—');
+          setField('iv', pkg.iv ?? '—');
+          setPre('ciphertext', pkg.ciphertext ?? '—');
+          setField('wrappedKey', pkg.encryptedAesKey ?? '—');
+          setField('signature', pkg.signature ?? '—');
+          appendMsg('Package fetched and populated into textarea.');
+          return true;
+        });
+      } catch (err) {
+        console.error(err);
+        appendMsg('Could not fetch package. Paste package JSON into textarea or ensure server implements GET /api/message/latest', 'result-fail');
+      }
+    });
+
+    // Verify & decrypt flow
+    document.getElementById('verifyBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('verifyBtn'); btn.disabled = true;
+      messagesEl.innerHTML = '';
+      // reset outputs
+      setField('timestamp','—'); setField('nonce','—'); setField('iv','—'); setPre('ciphertext','—'); setField('hashHex','—');
+      setField('signature','—'); setField('wrappedKey','—'); setField('verifyLocal','—'); setField('serverResult','—'); setPre('plaintext','—'); setPre('packageShow','—');
+
+      try {
+        const senderId = (document.getElementById('senderId').value || '').trim();
+        const receiverId = (document.getElementById('receiverId').value || '').trim();
+        if (!senderId || !receiverId) throw new Error('senderId and receiverId are required');
+
+        // parse package JSON
+        let pkg;
+        try {
+          pkg = JSON.parse(document.getElementById('packageJson').value);
+        } catch (e) {
+          throw new Error('Invalid package JSON: ' + e.message);
+        }
+
+        // validate fields
+        const required = ['senderId','receiverId','timestamp','nonce','encryptedAesKey','iv','ciphertext','signature'];
+        for (const f of required) if (!pkg[f] && pkg[f] !== 0) throw new Error('Package missing required field: ' + f);
+
+        // display basic fields
+        setPre('packageShow', JSON.stringify(pkg, null, 2));
+        setField('timestamp', pkg.timestamp);
+        setField('nonce', pkg.nonce);
+        setField('iv', pkg.iv);
+        setPre('ciphertext', pkg.ciphertext);
+        setField('wrappedKey', pkg.encryptedAesKey);
+        setField('signature', pkg.signature);
+
+        // Step 1: fetch sender public key
+        const senderPubB64 = await runStep('1) Fetching sender public key (/api/keys/public?userId=' + encodeURIComponent(pkg.senderId) + ')', async () => {
+          const resp = await fetch('/api/keys/public?userId=' + encodeURIComponent(pkg.senderId));
+          if (!resp.ok) {
+            const t = await resp.text();
+            throw new Error('Failed to fetch sender public key: ' + resp.status + ' ' + t);
+          }
+          const j = await resp.json();
+          if (!j.publicKey) throw new Error('Server returned no publicKey for sender');
+          return j.publicKey;
+        });
+
+        // Step 2: import sender public key for verification
+        const senderPublicKey = await runStep('2) Importing sender public key for signature verification', async () => {
+          const spkiArr = b64ToArrSafe(senderPubB64, 'sender public key (spki)');
+          return await crypto.subtle.importKey('spki', spkiArr.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+        });
+
+        // Step 3: compute SHA-256 (for display)
+        const ciphertextArr = (function(){ try { return b64ToArrSafe(pkg.ciphertext, 'ciphertext'); } catch(e) { throw e; } })();
+        await runStep('3) Computing SHA-256 of ciphertext (for display)', async () => {
+          const h = await crypto.subtle.digest('SHA-256', ciphertextArr);
+          setField('hashHex', bufToHex(h));
+          return true;
+        });
+
+        // Step 4: local signature verification using canonical string
+        const signatureArr = (function(){ try { return b64ToArrSafe(pkg.signature, 'signature'); } catch(e) { throw e; } })();
+
+        const localVerify = await runStep('4) Verifying signature locally using canonical payload', async () => {
+          const canonical = [pkg.senderId, pkg.receiverId, String(pkg.timestamp), pkg.nonce, pkg.iv, pkg.encryptedAesKey, pkg.ciphertext].join('|');
+          const encoder = new TextEncoder();
+          const canBytes = encoder.encode(canonical);
+          const ok = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, senderPublicKey, signatureArr.buffer, canBytes);
+          return ok;
+        });
+
+        if (!localVerify) {
+          setField('verifyLocal', 'Signature verification FAILED (local). Aborting.');
+          appendMsg('Local signature verification failed — do NOT decrypt.', 'result-fail');
+          btn.disabled = false;
+          return;
+        } else {
+          setField('verifyLocal', 'Signature verified locally (OK).');
+          appendMsg('Local signature verification succeeded.', 'result-ok');
+        }
+
+        // Step 5: check timestamp freshness client-side (5 minutes)
+        const now = Date.now();
+        const windowMs = 5 * 60 * 1000; // 5 minutes
+        if (Math.abs(now - Number(pkg.timestamp)) > windowMs) {
+          appendMsg('Package timestamp is outside allowed window (client-side). Aborting.', 'result-fail');
+          setField('serverResult', 'Timestamp outside allowed window (client-side)');
+          btn.disabled = false;
+          return;
+        } else {
+          appendMsg('Timestamp is fresh (client-side).', 'result-ok');
+        }
+
+        // Step 6: Call server to verify and decrypt
+        const serverResp = await runStep('5) Sending package to server to verify/unwrap/decrypt (POST /api/message/receive)', async () => {
+          const body = {
+            senderId: pkg.senderId,
+            receiverId: pkg.receiverId,
+            timestamp: pkg.timestamp,
+            nonce: pkg.nonce,
+            encryptedAesKey: pkg.encryptedAesKey,
+            iv: pkg.iv,
+            ciphertext: pkg.ciphertext,
+            signature: pkg.signature
+          };
+          const resp = await fetch('/api/message/receive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const text = await resp.text();
+          try { return JSON.parse(text); } catch(e) { return { raw: text, status: resp.status }; }
+        });
+
+        setField('serverResult', JSON.stringify(serverResp));
+        if (serverResp.verified === true && serverResp.plaintext != null) {
+          appendMsg('Server verified signature and decrypted ciphertext successfully.', 'result-ok');
+          setPre('plaintext', serverResp.plaintext);
+        } else {
+          appendMsg('Server failed to verify or decrypt. See serverResult for details.', 'result-fail');
+          setPre('plaintext', serverResp.plaintext || '');
+        }
+
+      } catch (err) {
+        console.error(err);
+        appendMsg('Fatal error: ' + (err && err.message ? err.message : err), 'result-fail');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

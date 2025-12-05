@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Attacker — MITM / Modify & Send</title>
+<style>
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; padding: 18px; max-width: 900px; margin: auto; }
+h1 { font-size:1.3rem; margin-bottom:6px; }
+label { display:block; margin-top:10px; }
+textarea { width:100%; height:200px; font-family: monospace; padding:8px; }
+input[type=text] { width:100%; padding:8px; }
+button { margin:8px 6px 0 0; padding:8px 12px; border-radius:6px; border:none; background:#c0392b; color:white; cursor:pointer; }
+button.secondary { background:#0366d6; }
+.card { border:1px solid #ddd; padding:12px; border-radius:8px; margin-top:12px; background:#fff9f9; }
+pre { background:#111; color:#eee; padding:10px; border-radius:6px; overflow:auto; }
+.msg { padding:6px 10px; border-radius:6px; background:#fff; border:1px solid #eee; margin-top:6px; }
+.small { font-size:0.9rem; color:#333; }
+</style>
+</head>
+<body>
+
+<h1>Attacker — Modify & Forward Package</h1>
+
+<div class="card">
+  <label>Sender ID: <input id="senderId" type="text" value="alice"/></label>
+  <label>Receiver ID: <input id="receiverId" type="text" value="bob"/></label>
+
+  <div style="margin-top:8px">
+    <button id="fetchBtn" class="secondary">Fetch latest package</button>
+    <button id="sendBtn">Send to Receiver</button>
+  </div>
+
+  <label style="margin-top:12px">Package JSON (editable):</label>
+  <textarea id="packageJson" placeholder='Package will appear here'></textarea>
+
+  <div id="log"></div>
+</div>
+
+<script>
+const fetchBtn = document.getElementById('fetchBtn');
+const sendBtn = document.getElementById('sendBtn');
+const packageJsonEl = document.getElementById('packageJson');
+const logEl = document.getElementById('log');
+
+function appendLog(text) {
+  const d = document.createElement('div'); d.className='msg';
+  d.innerHTML = `<div class="small">${text}</div>`;
+  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+  return d;
+}
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+async function runStep(text, action){
+  const node = appendLog(text);
+  try{
+    const res = await action();
+    await sleep(400+Math.random()*400);
+    const ok = document.createElement('span'); ok.textContent=' ✅'; ok.style.marginLeft='6px';
+    node.appendChild(ok);
+    return res;
+  }catch(err){
+    const fail = document.createElement('span'); fail.textContent=' ✖'; fail.style.color='crimson'; fail.style.marginLeft='6px';
+    node.appendChild(fail);
+    const em = document.createElement('div'); em.className='small'; em.textContent='Error: '+(err.message||err);
+    node.appendChild(em);
+    throw err;
+  }
+}
+
+// FETCH latest package
+fetchBtn.addEventListener('click', async ()=>{
+  const senderId = document.getElementById('senderId').value.trim();
+  const receiverId = document.getElementById('receiverId').value.trim();
+  if(!senderId || !receiverId){ appendLog('SenderId and ReceiverId required'); return; }
+  try{
+    const pkg = await runStep('Fetching package from server...', async ()=>{
+      const url = `/api/message/latest?senderId=${encodeURIComponent(senderId)}&receiverId=${encodeURIComponent(receiverId)}`;
+      const resp = await fetch(url);
+      if(!resp.ok){ const t = await resp.text(); throw new Error(`Server returned ${resp.status}: ${t}`);}
+      return await resp.json();
+    });
+    packageJsonEl.value = JSON.stringify(pkg,null,2);
+    appendLog('Package fetched successfully. You can now edit it.');
+  }catch(err){ appendLog('Fetch failed: '+(err.message||err)); }
+});
+
+// SEND package to reciver.html
+sendBtn.addEventListener('click', async ()=>{
+  try{
+    const pkg = JSON.parse(packageJsonEl.value);
+    const jsonStr = encodeURIComponent(JSON.stringify(pkg));
+    // open reciver.html in new tab with package preloaded via query param
+    window.open(`reciver.html?package=${jsonStr}`, '_blank');
+    appendLog('Opened reciver.html with current package.');
+  }catch(err){
+    appendLog('Failed to send package: '+(err.message||err));
+  }
+});
+</script>
+</body>
+</html>
